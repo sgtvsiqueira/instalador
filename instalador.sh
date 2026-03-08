@@ -11,7 +11,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-clear
+# Garante terminal válido (necessário ao rodar via curl | bash)
+export TERM="${TERM:-xterm}"
+[ -t 0 ] || exec bash "$0" "$@" </dev/tty
 
 echo -e "${YELLOW}===================================================="
 echo "       Configuração e Manutenção do Ambiente        "
