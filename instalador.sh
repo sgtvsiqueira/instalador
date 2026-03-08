@@ -143,7 +143,7 @@ action_instalar_rclone() {
         echo
         echo "Cole abaixo o token JSON gerado (começa com {\"access_token\":...)"
         echo -e "${YELLOW}------------------------------------------------------------${NC}"
-        read -rp "Token: " RCLONE_TOKEN
+        read -rp "Token: " RCLONE_TOKEN </dev/tty
 
         if [ -z "$RCLONE_TOKEN" ]; then
             echo -e "${RED}Token não informado. Abortando configuração do rclone.${NC}"
@@ -171,11 +171,11 @@ EOF
     echo "(Abra a pasta no browser — o ID é a parte final da URL)"
     echo -e "Exemplo: https://drive.google.com/drive/folders/${GREEN}1AbCdEfGhIjKlMnOpQr${NC}"
     echo "(Deixe em branco para montar o Drive inteiro)"
-    read -rp "Folder ID: " GDRIVE_FOLDER_ID
+    read -rp "Folder ID: " GDRIVE_FOLDER_ID </dev/tty
 
     # Pede ponto de montagem
     echo
-    read -rp "Caminho de montagem na VPS [padrão: /mnt/gdrive]: " MOUNT_POINT
+    read -rp "Caminho de montagem na VPS [padrão: /mnt/gdrive]: " MOUNT_POINT </dev/tty
     MOUNT_POINT="${MOUNT_POINT:-/mnt/gdrive}"
 
     # Monta em subpasta /drive para não sobrescrever arquivos locais existentes
@@ -279,7 +279,7 @@ _show_alias() {
             ((i++))
         fi
     done
-    read -p "Digite o número do alias (ou Enter para cancelar): " num
+    read -p "Digite o número do alias (ou Enter para cancelar): " num </dev/tty
     if [[ -n "$num" && "$num" =~ ^[0-9]+$ && "$num" -ge 1 && "$num" -le "${#list[@]}" ]]; then
         local chosen="${list[$((num-1))]}"
         eval "$(alias "$chosen" | cut -d= -f2- | tr -d "'")"
@@ -390,7 +390,7 @@ while true; do
     echo
     echo -e "${YELLOW}Dica: você pode escolher múltiplas opções separadas por vírgula ou espaço (ex: 1,3,5 ou 1 3 5)${NC}"
     echo
-    read -p "Escolha [0-10]: " entrada
+    read -p "Escolha [0-10]: " entrada </dev/tty
 
     # Normaliza separadores (vírgula e espaço) e itera
     IFS=', ' read -ra opcoes <<< "$entrada"
@@ -400,6 +400,6 @@ while true; do
     done
 
     echo -e "\nPressione Enter para voltar ao menu..."
-    read -r
+    read -r </dev/tty
     clear
 done
