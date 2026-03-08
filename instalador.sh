@@ -11,9 +11,16 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Garante terminal válido (necessário ao rodar via curl | bash)
+# Garante terminal válido
 export TERM="${TERM:-xterm}"
-[ -t 0 ] || exec bash "$0" "$@" </dev/tty
+
+# Se stdin não for terminal (ex: curl | bash), baixa e re-executa com /dev/tty
+if [ ! -t 0 ]; then
+    SCRIPT_PATH="$(mktemp /tmp/instalador.XXXXXX.sh)"
+    # Copia o próprio conteúdo para arquivo temporário
+    cat > "$SCRIPT_PATH"
+    exec bash "$SCRIPT_PATH" </dev/tty
+fi
 
 echo -e "${YELLOW}===================================================="
 echo "       Configuração e Manutenção do Ambiente        "
