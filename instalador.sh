@@ -119,6 +119,16 @@ action_instalar_nodejs() {
 action_instalar_rclone() {
     echo -e "${GREEN}→ Instalando e configurando rclone com Google Drive${NC}"
 
+    local TARGET_USER
+    if id vinicius &>/dev/null; then
+        TARGET_USER="vinicius"
+    else
+        TARGET_USER="root"
+    fi
+    local TARGET_HOME
+    TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+    echo -e "${YELLOW}Usando usuário: ${TARGET_USER}${NC}"
+
     # Instala rclone se não existir
     if ! command -v rclone >/dev/null; then
         curl -fsSL https://rclone.org/install.sh | as_root bash
@@ -134,8 +144,10 @@ action_instalar_rclone() {
         echo "user_allow_other" | as_root tee -a /etc/fuse.conf >/dev/null
     fi
 
+    local RCLONE_CONF="${TARGET_HOME}/.config/rclone/rclone.conf"
+
     # Verifica se o remote gdrive já existe
-    if rclone listremotes | grep -q "^gdrive:"; then
+    if as_root grep -q "^\[gdrive\]" "$RCLONE_CONF" 2>/dev/null; then
         echo -e "${YELLOW}Remote 'gdrive' já existe. Pulando configuração OAuth.${NC}"
     else
         echo
@@ -159,11 +171,10 @@ action_instalar_rclone() {
             return 1
         fi
 
-        # Cria configuração do remote gdrive
-        as_root mkdir -p /root/.config/rclone
-        local RCLONE_CONF="/root/.config/rclone/rclone.conf"
+        as_root mkdir -p "$(dirname "$RCLONE_CONF")"
+        as_root chown "${TARGET_USER}":"${TARGET_USER}" "$(dirname "$RCLONE_CONF")"
 
-        cat | as_root tee -a "$RCLONE_CONF" >/dev/null <<EOF
+        as_root tee -a "$RCLONE_CONF" >/dev/null <<EOF
 
 [gdrive]
 type = drive
@@ -174,43 +185,58 @@ EOF
         echo -e "${GREEN}Remote 'gdrive' configurado com sucesso.${NC}"
     fi
 
-    # Pede folder ID do Drive
+    # Pede URL ou ID da pasta do Drive
     echo
-    echo "Informe o ID da pasta do Google Drive que deseja montar."
-    echo "(Abra a pasta no browser — o ID é a parte final da URL)"
+    echo "Informe a URL ou o ID da pasta do Google Drive que deseja montar."
     echo -e "Exemplo: https://drive.google.com/drive/folders/${GREEN}1AbCdEfGhIjKlMnOpQr${NC}"
     echo "(Deixe em branco para montar o Drive inteiro)"
-    read -rp "Folder ID: " GDRIVE_FOLDER_ID </dev/tty
+    read -rp "URL ou Folder ID: " GDRIVE_INPUT </dev/tty
+
+    # Extrai ID se for URL completa
+    local GDRIVE_FOLDER_ID=""
+    if [ -n "$GDRIVE_INPUT" ]; then
+        GDRIVE_FOLDER_ID=$(echo "$GDRIVE_INPUT" | grep -oP '(?<=/folders/)[a-zA-Z0-9_-]+' \
+            || echo "$GDRIVE_INPUT" | grep -oP '(?<=id=)[a-zA-Z0-9_-]+' \
+            || echo "$GDRIVE_INPUT")
+    fi
 
     # Pede ponto de montagem
     echo
     read -rp "Caminho de montagem na VPS [padrão: /mnt/gdrive]: " MOUNT_POINT </dev/tty
     MOUNT_POINT="${MOUNT_POINT:-/mnt/gdrive}"
+    MOUNT_POINT="${MOUNT_POINT%/}"
 
-    # Monta em subpasta /drive para não sobrescrever arquivos locais existentes
-    local ACTUAL_MOUNT="${MOUNT_POINT}/drive"
-    as_root mkdir -p "$ACTUAL_MOUNT"
+    as_root mkdir -p "$MOUNT_POINT"
 
-    # Monta service systemd
-    local SERVICE_FILE="/etc/systemd/system/rclone-gdrive.service"
+    # Nome de serviço único derivado do caminho (permite múltiplas montagens)
+    local SERVICE_NAME="rclone-gdrive-$(echo "$MOUNT_POINT" | tr '/' '-' | sed 's/^-//')"
+    local SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-    # Constrói argumento de root folder se informado
-    local ROOT_FOLDER_ARG=""
+    local FOLDER_ARG=""
     if [ -n "$GDRIVE_FOLDER_ID" ]; then
-        ROOT_FOLDER_ARG="--drive-root-folder-id=${GDRIVE_FOLDER_ID} "
+        FOLDER_ARG="--drive-root-folder-id=${GDRIVE_FOLDER_ID} \\"$'\n    '
     fi
+
+    local RUN_UID RUN_GID
+    RUN_UID="$(id -u "$TARGET_USER")"
+    RUN_GID="$(id -g "$TARGET_USER")"
+
+    as_root chown "${TARGET_USER}":"${TARGET_USER}" "$MOUNT_POINT"
 
     as_root tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=rclone mount Google Drive (gdrive)
+Description=rclone mount Google Drive em ${MOUNT_POINT}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStartPre=/bin/mkdir -p ${ACTUAL_MOUNT}
-ExecStart=/usr/bin/rclone mount gdrive: ${ACTUAL_MOUNT} \\
-    ${ROOT_FOLDER_ARG}--allow-other \\
+User=${TARGET_USER}
+ExecStartPre=/bin/mkdir -p ${MOUNT_POINT}
+ExecStart=/usr/bin/rclone mount gdrive: ${MOUNT_POINT} \\
+    ${FOLDER_ARG}--allow-other \\
+    --uid=${RUN_UID} \\
+    --gid=${RUN_GID} \\
     --vfs-cache-mode full \\
     --vfs-cache-max-size 10G \\
     --vfs-read-chunk-size 128M \\
@@ -222,26 +248,30 @@ ExecStart=/usr/bin/rclone mount gdrive: ${ACTUAL_MOUNT} \\
     --use-mmap \\
     --log-level INFO \\
     --log-file /var/log/rclone-gdrive.log
-ExecStop=/bin/fusermount -uz ${ACTUAL_MOUNT}
+ExecStop=/bin/fusermount -uz ${MOUNT_POINT}
 Restart=on-failure
 RestartSec=10
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF
 
     as_root systemctl daemon-reload
-    as_root systemctl enable rclone-gdrive.service
-    as_root systemctl start rclone-gdrive.service
+    as_root systemctl enable "${SERVICE_NAME}.service"
+    as_root systemctl start "${SERVICE_NAME}.service"
 
     echo
-    sleep 2
-    if systemctl is-active --quiet rclone-gdrive.service; then
-        echo -e "${GREEN}✔ Google Drive montado com sucesso em: ${ACTUAL_MOUNT}${NC}"
-        echo -e "${GREEN}  Arquivos locais em ${MOUNT_POINT} preservados${NC}"
+    sleep 3
+    if systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+        echo -e "${GREEN}✔ Google Drive montado com sucesso em: ${MOUNT_POINT}${NC}"
+        echo -e "${GREEN}  Serviço: ${SERVICE_NAME}${NC}"
+        echo -e "${GREEN}  Usuário: ${TARGET_USER} (uid=${RUN_UID})${NC}"
         echo -e "${GREEN}  Serviço systemd ativado (inicia automático no boot)${NC}"
+        echo
+        echo "Para verificar: systemctl status ${SERVICE_NAME}"
+        echo "Para desmontar: sudo systemctl stop ${SERVICE_NAME}"
     else
-        echo -e "${RED}✘ Serviço não iniciou. Verifique: journalctl -u rclone-gdrive.service${NC}"
+        echo -e "${RED}✘ Serviço não iniciou. Verifique: journalctl -u ${SERVICE_NAME}.service${NC}"
     fi
 }
 
